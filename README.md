@@ -1,13 +1,12 @@
 # ScanMap
 
-**ScanMap** is a simple Python-based tool designed to perform network scans and check the open and closed ports on a target system. It scans commonly used ports and presents the results in a format similar to Nmap's output, without any Nmap copyrights.
-
+**ScanMap** is a simple tool built with Python aimed at performing network scans to check open and closed ports on the target system. The tool scans a set of common ports and presents the results in a well-organized and easy-to-read format.
 ## Features
 
 - Scans a predefined list of 150 common ports (including 50 additional ports).
 - Asynchronously checks open and closed ports using the `asyncio` library.
 - Displays results in a clean, colored format similar to Nmap's report style.
-- Works with both IP addresses and domain names (e.g., `moi.gov.krd`).
+- Works with both IP addresses and domain names (e.g., `example.com`).
 
 ## Installation
 ```bash
