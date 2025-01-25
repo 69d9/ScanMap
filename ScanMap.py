@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from colorama import init, Fore, Style
 import re
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR)
@@ -308,18 +309,40 @@ class ScanMap:
 def main():
     scanner = ScanMap()
     try:
-        print(f"\n{scanner.M}[*] Enter target domain or IP (e.g., example.com): {scanner.r}", end='')
+        # Clear screen first (works on both Windows and Unix)
+        os.system('cls' if os.name == 'nt' else 'clear')
+        
+        # Print banner and copyright
+        scanner.print_banner()
+        
+        # Professional separator
+        print(f"\n{scanner.X}{'═' * 70}{scanner.r}")
+        print(f"{scanner.U}[*] Welcome to ScanMap Professional Edition{scanner.r}")
+        print(f"{scanner.C}[*] Copyright 2025 GhosT LulzSec. All Rights Reserved.{scanner.r}")
+        print(f"{scanner.X}{'═' * 70}{scanner.r}\n")
+        
+        # Input section with professional styling
+        print(f"{scanner.M}[+] Target Specification{scanner.r}")
+        print(f"{scanner.C}    │")
+        print(f"{scanner.C}    └─── {scanner.W}Enter Domain or IP Address: {scanner.r}", end='')
         target = input().strip()
         
         if not target:
-            print(f"{scanner.Z}[!] Error: Target cannot be empty{scanner.r}")
+            print(f"\n{scanner.Z}[!] Error: Target specification is required{scanner.r}")
             return
+            
+        # Another separator before starting scan
+        print(f"\n{scanner.X}{'═' * 70}{scanner.r}")
+        print(f"{scanner.U}[+] Initializing Professional Scan Engine...{scanner.r}")
+        print(f"{scanner.X}{'═' * 70}{scanner.r}\n")
 
         asyncio.run(scanner.run(target))
     except KeyboardInterrupt:
-        print(f"\n{scanner.Z}[!] Scanner terminated by user{scanner.r}")
+        print(f"\n{scanner.Z}[!] Operation terminated by user{scanner.r}")
+        print(f"{scanner.X}{'═' * 70}{scanner.r}")
     except Exception as e:
-        print(f"\n{scanner.Z}[!] Error: {str(e)}{scanner.r}")
+        print(f"\n{scanner.Z}[!] Critical Error: {str(e)}{scanner.r}")
+        print(f"{scanner.X}{'═' * 70}{scanner.r}")
 
 if __name__ == "__main__":
     main()
