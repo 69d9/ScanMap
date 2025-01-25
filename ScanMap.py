@@ -421,14 +421,191 @@ class ScanMap:
 
     async def check_vulnerabilities(self):
         """Check for common vulnerabilities."""
-        # Example vulnerability checks
-        for port, service, _ in self.open_ports:
-            if service == 'http' or port in [80, 443, 8080]:
-                await self.check_web_vulnerabilities(port)
-            elif service == 'ssh':
-                await self.check_ssh_vulnerabilities(port)
-            elif service == 'ftp':
-                await self.check_ftp_vulnerabilities(port)
+        for port, service, banner in self.open_ports:
+            try:
+                if service == 'http' or port in [80, 443, 8080, 8443]:
+                    await self.check_web_vulnerabilities(port)
+                elif service == 'ssh' or port == 22:
+                    await self.check_ssh_vulnerabilities(port)
+                elif service == 'ftp' or port == 21:
+                    await self.check_ftp_vulnerabilities(port)
+                elif service == 'smtp' or port == 25:
+                    await self.check_smtp_vulnerabilities(port)
+                elif service in ['mysql', 'mariadb'] or port == 3306:
+                    await self.check_mysql_vulnerabilities(port)
+                elif port == 445:
+                    await self.check_smb_vulnerabilities(port)
+            except Exception as e:
+                self.vulnerabilities.append(f"Error checking {service} on port {port}: {str(e)}")
+
+    async def check_ssh_vulnerabilities(self, port):
+        """Check SSH-specific vulnerabilities."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            
+            if sock.connect_ex((self.target, port)) == 0:
+                # Send SSH version probe
+                sock.send(b"SSH-2.0-GhostScan\r\n")
+                response = sock.recv(1024).decode('utf-8', errors='ignore')
+                
+                # Check SSH version
+                if 'SSH-1' in response:
+                    self.vulnerabilities.append(f"Port {port}: Outdated SSH version 1.x detected (vulnerable)")
+                
+                # Check for known vulnerable versions
+                vulnerable_versions = ['OpenSSH_4', 'OpenSSH_5.0', 'OpenSSH_5.1', 'OpenSSH_5.2']
+                for version in vulnerable_versions:
+                    if version in response:
+                        self.vulnerabilities.append(f"Port {port}: Potentially vulnerable SSH version detected: {version}")
+                
+                # Check for weak algorithms if possible
+                if 'diffie-hellman-group1' in response.lower():
+                    self.vulnerabilities.append(f"Port {port}: Weak key exchange method detected")
+                
+            sock.close()
+        except:
+            pass
+
+    async def check_ftp_vulnerabilities(self, port):
+        """Check FTP-specific vulnerabilities."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            
+            if sock.connect_ex((self.target, port)) == 0:
+                # Try anonymous login
+                try:
+                    response = sock.recv(1024).decode()
+                    sock.send(b"USER anonymous\r\n")
+                    response = sock.recv(1024).decode()
+                    sock.send(b"PASS anonymous@ghost.scan\r\n")
+                    response = sock.recv(1024).decode()
+                    
+                    if '230' in response:  # 230 = Login successful
+                        self.vulnerabilities.append(f"Port {port}: Anonymous FTP login allowed")
+                    
+                    # Check for clear-text authentication
+                    if not port == 990:  # Not FTPS
+                        self.vulnerabilities.append(f"Port {port}: FTP service uses clear-text authentication")
+                except:
+                    pass
+                
+            sock.close()
+        except:
+            pass
+
+    async def check_smtp_vulnerabilities(self, port):
+        """Check SMTP-specific vulnerabilities."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            
+            if sock.connect_ex((self.target, port)) == 0:
+                # Check for open relay
+                commands = [
+                    b"HELO ghost.scan\r\n",
+                    b"MAIL FROM: <test@ghost.scan>\r\n",
+                    b"RCPT TO: <test@ghost.scan>\r\n"
+                ]
+                
+                try:
+                    response = sock.recv(1024).decode()
+                    for cmd in commands:
+                        sock.send(cmd)
+                        response = sock.recv(1024).decode()
+                        if '250' in response:  # 250 = OK
+                            self.vulnerabilities.append(f"Port {port}: SMTP server might be configured as an open relay")
+                            break
+                except:
+                    pass
+                
+                # Check for VRFY command
+                try:
+                    sock.send(b"VRFY admin\r\n")
+                    response = sock.recv(1024).decode()
+                    if not response.startswith('550'):  # 550 = Command disabled
+                        self.vulnerabilities.append(f"Port {port}: SMTP VRFY command enabled (information disclosure)")
+                except:
+                    pass
+                
+            sock.close()
+        except:
+            pass
+
+    async def check_mysql_vulnerabilities(self, port):
+        """Check MySQL-specific vulnerabilities."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            
+            if sock.connect_ex((self.target, port)) == 0:
+                # Try common username/password combinations
+                common_creds = [
+                    ('root', ''),
+                    ('root', 'root'),
+                    ('admin', 'admin')
+                ]
+                
+                for username, password in common_creds:
+                    try:
+                        # This is a simplified check - in real implementation,
+                        # you'd need to implement the MySQL protocol
+                        if self.test_mysql_auth(sock, username, password):
+                            self.vulnerabilities.append(
+                                f"Port {port}: MySQL server allows login with credentials: {username}/{password}"
+                            )
+                            break
+                    except:
+                        continue
+                
+            sock.close()
+        except:
+            pass
+
+    async def check_smb_vulnerabilities(self, port):
+        """Check SMB-specific vulnerabilities."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            
+            if sock.connect_ex((self.target, port)) == 0:
+                # Check for SMBv1
+                try:
+                    # Send SMB negotiate protocol request
+                    negotiate_request = (
+                        b'\x00\x00\x00\x85'  # NetBIOS
+                        b'\xff\x53\x4d\x42'  # SMB
+                        b'\x72'              # Negotiate Protocol
+                        b'\x00\x00\x00\x00'  # Status
+                        b'\x18'              # Flags
+                        b'\x53\xc8'          # Flags2
+                        b'\x00\x00'          # PID High
+                        b'\x00\x00\x00\x00'  # Signature
+                        b'\x00\x00\x00\x00'  # Reserved
+                        b'\x00\x00'          # TID
+                        b'\x2f\x4b'          # PID
+                        b'\x00\x00'          # UID
+                        b'\xc5\x5e'          # MID
+                    )
+                    
+                    sock.send(negotiate_request)
+                    response = sock.recv(1024)
+                    
+                    if response[4] == 0x72:  # SMBv1 response
+                        self.vulnerabilities.append(f"Port {port}: SMBv1 protocol detected (vulnerable to EternalBlue)")
+                except:
+                    pass
+                
+            sock.close()
+        except:
+            pass
+
+    def test_mysql_auth(self, sock, username, password):
+        """Helper method to test MySQL authentication."""
+        # This is a placeholder - in real implementation,
+        # you'd need to implement the MySQL authentication protocol
+        return False
 
     async def check_web_vulnerabilities(self, port):
         """Check for common web vulnerabilities."""
