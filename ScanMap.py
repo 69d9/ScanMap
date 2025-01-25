@@ -306,13 +306,20 @@ class ScanMap:
         print(self.banner)
 
 def main():
-    if len(sys.argv) != 2:
-        print("\nUsage: python scanmap.py <target>")
-        print("Example: python scanmap.py example.com\n")
-        sys.exit(1)
-
     scanner = ScanMap()
-    asyncio.run(scanner.run(sys.argv[1]))
+    try:
+        print(f"\n{scanner.M}[*] Enter target domain or IP (e.g., example.com): {scanner.r}", end='')
+        target = input().strip()
+        
+        if not target:
+            print(f"{scanner.Z}[!] Error: Target cannot be empty{scanner.r}")
+            return
+
+        asyncio.run(scanner.run(target))
+    except KeyboardInterrupt:
+        print(f"\n{scanner.Z}[!] Scanner terminated by user{scanner.r}")
+    except Exception as e:
+        print(f"\n{scanner.Z}[!] Error: {str(e)}{scanner.r}")
 
 if __name__ == "__main__":
     main()
