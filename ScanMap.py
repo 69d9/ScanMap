@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from datetime import datetime
 from colorama import init, Fore, Style
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR)
@@ -218,6 +219,80 @@ class ScanMap:
         self.retry_count = 3
         self.chunk_size = 100
 
+    def is_valid_domain(self, domain):
+        """Validate domain name format."""
+        try:
+            # Basic domain format validation
+            if not domain or len(domain) > 255:
+                return False
+            
+            # Remove trailing dot
+            if domain[-1] == ".":
+                domain = domain[:-1]
+            
+            # Check each part
+            allowed = re.compile(r"(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
+            parts = domain.split(".")
+            
+            if len(parts) < 2:
+                return False
+                
+            return all(allowed.match(part) for part in parts)
+        except:
+            return False
+
+    def is_domain_registered(self, domain):
+        """Check if domain is actually registered."""
+        try:
+            # Try multiple DNS resolvers
+            resolvers = ['8.8.8.8', '1.1.1.1', '9.9.9.9', '208.67.222.222']
+            
+            for resolver_ip in resolvers:
+                try:
+                    resolver = dns.resolver.Resolver()
+                    resolver.nameservers = [resolver_ip]
+                    resolver.timeout = 3
+                    resolver.lifetime = 3
+                    
+                    # Try to get NS records first
+                    try:
+                        resolver.resolve(domain, 'NS')
+                        return True
+                    except dns.resolver.NoAnswer:
+                        # If no NS records, try A records
+                        try:
+                            resolver.resolve(domain, 'A')
+                            return True
+                        except dns.resolver.NoAnswer:
+                            continue
+                    except dns.resolver.NXDOMAIN:
+                        continue
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+            
+            # If all resolvers failed, try a direct whois query
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                sock.connect(('whois.verisign-grs.com', 43))
+                sock.send(f"{domain}\r\n".encode())
+                response = sock.recv(4096).decode()
+                sock.close()
+                
+                # Check for typical "No match" responses
+                if "No match for" in response or "NOT FOUND" in response:
+                    return False
+                return True
+            except:
+                pass
+                
+            return False
+        except Exception as e:
+            logger.debug(f"Domain registration check failed: {str(e)}")
+            return False
+
     async def advanced_service_detection(self, port, banner):
         """Enhanced service and version detection."""
         service_info = {'service': 'unknown', 'version': 'unknown', 'product': 'unknown'}
@@ -402,31 +477,50 @@ class ScanMap:
     async def resolve_target(self, target):
         """Resolve target hostname to IP and gather basic information."""
         try:
-            self.target = target
-            try:
-                # Try multiple DNS resolvers
-                resolvers = ['8.8.8.8', '1.1.1.1', '9.9.9.9']
-                for resolver in resolvers:
-                    try:
-                        resolver_obj = dns.resolver.Resolver()
-                        resolver_obj.nameservers = [resolver]
-                        answers = resolver_obj.resolve(target, 'A')
+            self.target = target.lower().strip()
+            
+            # Validate domain format first
+            if not self.is_valid_domain(self.target):
+                print(f"{self.Z}[-] Invalid domain format{self.r}")
+                return False
+            
+            # Check if domain is registered
+            if not self.is_domain_registered(self.target):
+                print(f"{self.Z}[-] Domain does not exist or is not registered{self.r}")
+                return False
+            
+            # Initialize IP as unknown
+            self.ip_address = "Unknown"
+            
+            # Try multiple DNS resolvers with timeout
+            resolvers = ['8.8.8.8', '1.1.1.1', '9.9.9.9', '208.67.222.222']
+            for resolver_ip in resolvers:
+                try:
+                    resolver = dns.resolver.Resolver()
+                    resolver.nameservers = [resolver_ip]
+                    resolver.timeout = 3
+                    resolver.lifetime = 3
+                    
+                    answers = resolver.resolve(self.target, 'A')
+                    if answers:
                         self.ip_address = answers[0].address
                         break
-                    except Exception:
-                        continue
-                
-                if not self.ip_address:
-                    self.ip_address = socket.gethostbyname(target)
-            except Exception as e:
-                logger.error(f"DNS resolution failed: {str(e)}")
-                self.ip_address = "Unknown"
-
-            print(f"{self.A}[+] Target: {target} ({self.ip_address}){self.r}")
+                except Exception as e:
+                    logger.debug(f"DNS resolution failed for {resolver_ip}: {str(e)}")
+                    continue
+            
+            # If all resolvers failed, try socket
+            if self.ip_address == "Unknown":
+                try:
+                    self.ip_address = socket.gethostbyname(self.target)
+                except Exception as e:
+                    logger.error(f"All DNS resolution methods failed: {str(e)}")
+            
+            print(f"{self.A}[+] Target: {self.target} ({self.ip_address}){self.r}")
             
             # Get domain information with improved error handling
             print(f"{self.F}[+] Domain Information:{self.r}")
-            whois_info = self.domain_info.get_whois_info(target)
+            whois_info = self.domain_info.get_whois_info(self.target)
             
             if whois_info:
                 registrar = whois_info.get('registrar', 'Unknown')
@@ -443,21 +537,24 @@ class ScanMap:
             try:
                 for record_type in ['A', 'MX', 'NS', 'TXT']:
                     try:
-                        answers = dns.resolver.resolve(target, record_type)
+                        answers = resolver.resolve(self.target, record_type)
                         self.dns_records[record_type] = [str(rdata) for rdata in answers]
+                        print(f"   {record_type} Records: {', '.join(self.dns_records[record_type])}")
                     except dns.resolver.NoAnswer:
                         continue
                     except dns.resolver.NXDOMAIN:
-                        print(f"{self.Z}[-] Domain does not exist{self.r}")
-                        break
+                        continue
                     except Exception as e:
                         logger.debug(f"Error getting {record_type} records: {str(e)}")
             except Exception as e:
-                logger.error(f"DNS record retrieval failed: {str(e)}")
+                logger.debug(f"DNS record retrieval failed: {str(e)}")
+            
+            return True
 
         except Exception as e:
             logger.error(f"Target resolution failed: {str(e)}")
             print(f"{self.Z}[-] Error resolving target: {str(e)}{self.r}")
+            return False
 
     async def check_port(self, port):
         """Check if a port is open with improved reliability."""
@@ -839,18 +936,18 @@ class ScanMap:
             start_time = time.time()
 
             # Execute all scan components
-            await self.resolve_target(target)
-            print(f"{self.F}[+] Starting port scan...{self.r}")
-            await self.scan_ports()
-            print(f"{self.F}[+] Checking for vulnerabilities...{self.r}")
-            await self.check_vulnerabilities()
-            print(f"{self.F}[+] Detecting firewall...{self.r}")
-            await self.detect_firewall()
+            if await self.resolve_target(target):
+                print(f"{self.F}[+] Starting port scan...{self.r}")
+                await self.scan_ports()
+                print(f"{self.F}[+] Checking for vulnerabilities...{self.r}")
+                await self.check_vulnerabilities()
+                print(f"{self.F}[+] Detecting firewall...{self.r}")
+                await self.detect_firewall()
 
-            end_time = time.time()
-            elapsed_time = end_time - start_time
+                end_time = time.time()
+                elapsed_time = end_time - start_time
 
-            self.print_results(elapsed_time)
+                self.print_results(elapsed_time)
 
         except KeyboardInterrupt:
             print(f"\n{self.Z}Scan interrupted by user. Exiting...{self.r}")
