@@ -34,20 +34,20 @@ py -m pip install python-whois colorama dnspython
 ### Quick Start
 ```bash
 # Clone the repository
-git clone https://github.com/69d9/scanmap.git
+git clone https://github.com/69d9/ScanMap.git
 
 # Navigate to the directory
-cd scanmap
+cd ScanMap
 
 # Run ScanMap Professional
-py scanmap.py
+python ScanMap.py
 ```
 
 ## Usage
 
 1. Launch ScanMap Professional:
    ```bash
-   py scanmap.py
+   python ScanMap.py
    ```
 
 2. When prompted, enter your target domain or IP address:
