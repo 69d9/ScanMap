@@ -12,14 +12,104 @@ import whois
 import dns.resolver
 import ssl
 import subprocess
+import logging
+import concurrent.futures
 from urllib.parse import urlparse
 from datetime import datetime
 from colorama import init, Fore, Style
 from concurrent.futures import ThreadPoolExecutor
-import re
+
+# Configure logging
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 # Initialize colorama for Windows support
 init()
+
+class DomainInfo:
+    def __init__(self):
+        self.whois_servers = {
+            'com': 'whois.verisign-grs.com',
+            'net': 'whois.verisign-grs.com',
+            'org': 'whois.pir.org',
+            'info': 'whois.afilias.net',
+            'biz': 'whois.biz',
+        }
+        self.timeout = 10
+
+    def get_whois_info(self, domain):
+        """Get WHOIS information with multiple fallback methods."""
+        try:
+            # Method 1: Using python-whois
+            info = whois.whois(domain)
+            if info and info.registrar:
+                return info
+        except Exception as e:
+            logger.debug(f"Primary WHOIS lookup failed: {str(e)}")
+
+        try:
+            # Method 2: Direct WHOIS server query
+            tld = domain.split('.')[-1]
+            if tld in self.whois_servers:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)
+                sock.connect((self.whois_servers[tld], 43))
+                sock.send(f"{domain}\r\n".encode())
+                response = sock.recv(4096).decode()
+                sock.close()
+                
+                # Parse the response
+                info = self._parse_whois_response(response)
+                if info.get('registrar'):
+                    return info
+        except Exception as e:
+            logger.debug(f"Direct WHOIS lookup failed: {str(e)}")
+
+        try:
+            # Method 3: HTTP API fallback
+            response = requests.get(
+                f"https://rdap.verisign.com/com/v1/domain/{domain}",
+                timeout=self.timeout
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return self._parse_rdap_response(data)
+        except Exception as e:
+            logger.debug(f"RDAP lookup failed: {str(e)}")
+
+        return None
+
+    def _parse_whois_response(self, response):
+        """Parse raw WHOIS response."""
+        info = {}
+        for line in response.splitlines():
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip().lower()
+                value = value.strip()
+                
+                if 'registrar' in key:
+                    info['registrar'] = value
+                elif 'creation date' in key:
+                    info['creation_date'] = value
+                elif 'expiration date' in key or 'expiry date' in key:
+                    info['expiration_date'] = value
+        return info
+
+    def _parse_rdap_response(self, data):
+        """Parse RDAP API response."""
+        info = {}
+        if 'entities' in data:
+            for entity in data['entities']:
+                if entity.get('roles', []) == ['registrar']:
+                    info['registrar'] = entity.get('vcardArray', [])[-1].get('name', None)
+        if 'events' in data:
+            for event in data['events']:
+                if event['eventAction'] == 'registration':
+                    info['creation_date'] = event['eventDate']
+                elif event['eventAction'] == 'expiration':
+                    info['expiration_date'] = event['eventDate']
+        return info
 
 class ScanMap:
     def __init__(self):
@@ -121,6 +211,12 @@ class ScanMap:
             'rdp': [b'RDP', b'RDPClient'],
             'telnet': [b'Telnet']
         }
+
+        self.domain_info = DomainInfo()
+        self.executor = ThreadPoolExecutor(max_workers=50)
+        self.scan_timeout = 2
+        self.retry_count = 3
+        self.chunk_size = 100
 
     async def advanced_service_detection(self, port, banner):
         """Enhanced service and version detection."""
@@ -307,54 +403,106 @@ class ScanMap:
         """Resolve target hostname to IP and gather basic information."""
         try:
             self.target = target
-            self.ip_address = socket.gethostbyname(target)
+            try:
+                # Try multiple DNS resolvers
+                resolvers = ['8.8.8.8', '1.1.1.1', '9.9.9.9']
+                for resolver in resolvers:
+                    try:
+                        resolver_obj = dns.resolver.Resolver()
+                        resolver_obj.nameservers = [resolver]
+                        answers = resolver_obj.resolve(target, 'A')
+                        self.ip_address = answers[0].address
+                        break
+                    except Exception:
+                        continue
+                
+                if not self.ip_address:
+                    self.ip_address = socket.gethostbyname(target)
+            except Exception as e:
+                logger.error(f"DNS resolution failed: {str(e)}")
+                self.ip_address = "Unknown"
+
             print(f"{self.A}[+] Target: {target} ({self.ip_address}){self.r}")
             
-            # Get WHOIS information
-            try:
-                self.whois_info = whois.whois(target)
-                print(f"{self.F}[+] Domain Information:{self.r}")
-                print(f"   Registrar: {self.whois_info.registrar}")
-                print(f"   Creation Date: {self.whois_info.creation_date}")
-                print(f"   Expiration Date: {self.whois_info.expiration_date}")
-            except:
-                print(f"{self.Z}[-] WHOIS information unavailable{self.r}")
+            # Get domain information with improved error handling
+            print(f"{self.F}[+] Domain Information:{self.r}")
+            whois_info = self.domain_info.get_whois_info(target)
+            
+            if whois_info:
+                registrar = whois_info.get('registrar', 'Unknown')
+                creation_date = whois_info.get('creation_date', 'Unknown')
+                expiration_date = whois_info.get('expiration_date', 'Unknown')
+                
+                print(f"   Registrar: {registrar}")
+                print(f"   Creation Date: {creation_date}")
+                print(f"   Expiration Date: {expiration_date}")
+            else:
+                print(f"{self.Z}[-] Could not retrieve domain information{self.r}")
 
-            # Get DNS records
+            # Get DNS records with improved error handling
             try:
                 for record_type in ['A', 'MX', 'NS', 'TXT']:
-                    answers = dns.resolver.resolve(target, record_type)
-                    self.dns_records[record_type] = [str(rdata) for rdata in answers]
-            except:
-                pass
+                    try:
+                        answers = dns.resolver.resolve(target, record_type)
+                        self.dns_records[record_type] = [str(rdata) for rdata in answers]
+                    except dns.resolver.NoAnswer:
+                        continue
+                    except dns.resolver.NXDOMAIN:
+                        print(f"{self.Z}[-] Domain does not exist{self.r}")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Error getting {record_type} records: {str(e)}")
+            except Exception as e:
+                logger.error(f"DNS record retrieval failed: {str(e)}")
 
-        except socket.gaierror:
-            print(f"{self.Z}[-] Could not resolve hostname{self.r}")
-            sys.exit(1)
+        except Exception as e:
+            logger.error(f"Target resolution failed: {str(e)}")
+            print(f"{self.Z}[-] Error resolving target: {str(e)}{self.r}")
 
     async def check_port(self, port):
-        """Check if a port is open and gather service information."""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex((self.target, port))
-            
-            if result == 0:
+        """Check if a port is open with improved reliability."""
+        for attempt in range(self.retry_count):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.scan_timeout)
+                result = sock.connect_ex((self.target, port))
+                
+                if result == 0:
+                    try:
+                        service = socket.getservbyport(port)
+                        banner = await self.grab_banner_async(sock)
+                        self.open_ports.add((port, service, banner))
+                        return
+                    except:
+                        self.open_ports.add((port, "unknown", ""))
+                        return
+                sock.close()
+                
+                if result != 0 and attempt == self.retry_count - 1:
+                    self.closed_ports.add(port)
+                
+            except Exception as e:
+                if attempt == self.retry_count - 1:
+                    logger.debug(f"Port {port} check failed: {str(e)}")
+                    self.closed_ports.add(port)
+            finally:
                 try:
-                    service = socket.getservbyport(port)
-                    banner = self.grab_banner(sock)
-                    self.open_ports.add((port, service, banner))
-                    
-                    # Additional service checks
-                    if port == 443:
-                        self.check_ssl_security(self.target, port)
+                    sock.close()
                 except:
-                    self.open_ports.add((port, "unknown", ""))
-            else:
-                self.closed_ports.add(port)
-            sock.close()
-        except:
-            self.closed_ports.add(port)
+                    pass
+
+    async def grab_banner_async(self, sock):
+        """Asynchronous banner grabbing with timeout."""
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                self.executor,
+                self.grab_banner,
+                sock
+            )
+        except Exception as e:
+            logger.debug(f"Banner grab failed: {str(e)}")
+            return ""
 
     def grab_banner(self, sock):
         """Attempt to grab service banner."""
@@ -365,19 +513,59 @@ class ScanMap:
         except:
             return ""
 
-    def check_ssl_security(self, host, port):
-        """Check SSL/TLS security configuration."""
+    async def scan_ports(self):
+        """Scan ports with improved performance and reliability."""
         try:
-            context = ssl.create_default_context()
-            with context.wrap_socket(socket.socket(), server_hostname=host) as s:
-                s.connect((host, port))
-                self.ssl_info = {
-                    'version': s.version(),
-                    'cipher': s.cipher(),
-                    'cert': s.getpeercert()
-                }
+            all_ports = []
+            for category_info in self.port_categories.values():
+                all_ports.extend(category_info['ports'])
+            all_ports = list(set(all_ports))  # Remove duplicates
+            
+            # Split ports into chunks for better management
+            port_chunks = [all_ports[i:i + self.chunk_size] 
+                         for i in range(0, len(all_ports), self.chunk_size)]
+            
+            for chunk in port_chunks:
+                tasks = []
+                for port in chunk:
+                    tasks.append(asyncio.create_task(self.check_port(port)))
+                await asyncio.gather(*tasks)
+                
+                # Small delay between chunks to prevent overwhelming
+                await asyncio.sleep(0.1)
+                
+        except Exception as e:
+            logger.error(f"Port scanning failed: {str(e)}")
+            print(f"{self.Z}[-] Error during port scan: {str(e)}{self.r}")
+
+    async def check_security_headers(self, port):
+        """Check for security headers on web services."""
+        security_headers = {
+            'Strict-Transport-Security': 'Missing HSTS',
+            'X-Frame-Options': 'Missing clickjacking protection',
+            'X-Content-Type-Options': 'Missing MIME-type protection',
+            'Content-Security-Policy': 'Missing CSP',
+            'X-XSS-Protection': 'Missing XSS protection',
+            'Referrer-Policy': 'Missing referrer policy'
+        }
+
+        try:
+            protocol = 'https' if port == 443 else 'http'
+            response = requests.get(
+                f"{protocol}://{self.target}:{port}",
+                verify=False,
+                timeout=5,
+                headers={'User-Agent': 'GhostScan Security Analyzer'}
+            )
+            
+            missing_headers = []
+            for header, message in security_headers.items():
+                if header not in response.headers:
+                    missing_headers.append(message)
+            
+            return missing_headers
         except:
-            self.ssl_info = None
+            return []
 
     async def detect_firewall(self):
         """Attempt to detect firewall presence."""
@@ -636,18 +824,6 @@ class ScanMap:
 
         except:
             pass
-
-    async def scan_ports(self):
-        """Scan ports asynchronously."""
-        all_ports = []
-        for category_ports in self.port_categories.values():
-            all_ports.extend(category_ports['ports'])
-        all_ports = list(set(all_ports))  # Remove duplicates
-        
-        tasks = []
-        for port in all_ports:
-            tasks.append(asyncio.create_task(self.check_port(port)))
-        await asyncio.gather(*tasks)
 
     async def run(self):
         """Main execution method."""
