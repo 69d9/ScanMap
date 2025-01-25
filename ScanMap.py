@@ -8,14 +8,15 @@ import os
 import platform
 import requests
 import json
-import nmap
 import whois
 import dns.resolver
 import ssl
 import subprocess
 from urllib.parse import urlparse
+from datetime import datetime
 from colorama import init, Fore, Style
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 # Initialize colorama for Windows support
 init()
@@ -33,33 +34,25 @@ class ScanMap:
         self.r = "\033[1;31m"
         
         self.banner = rf"""
+{Fore.RED}
+    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+    █▄░▄██▀▄─██░▄▄░█░▄▄▀█▄─▄█░▄▄█▄─▄▄─█▄─▄▄─█▄─▄▄▀█░▄▄░██▀▄─██▄─▄▄▀█▄─▄▄─█▄─▄▄▀█░▄▄░█
+    ██░███─▀─██░▀▀░█░▀▀░██░██░▄▄██─▄█▀██─▄█▀██─▄─▄█░▀▀░██─▀─███─██─██─▄█▀██─▄─▄█░▀▀░█
+    ▀▀▄▄▀▀▄▄▀▀▄▄▀▀░▀░▀▀░▀▄▄▄▀▄▄▄▀▄▄▄▄▄▀▄▄▄▄▄▀▄▄▀▄▄▀▄▄▀▀░▀▄▄▀▄▄▀▄▄▄▄▀▀▄▄▄▄▄▀▄▄▀▄▄▀▄▄▀▀░
 {Fore.YELLOW}
-    ░██████╗░██╗░░██╗░█████╗░░██████╗████████╗  ░██████╗░█████╗░░█████╗░███╗░░██╗
-    ██╔════╝░██║░░██║██╔══██╗██╔════╝╚══██╔══╝  ██╔════╝██╔══██╗██╔══██╗████╗░██║
-    ██║░░██╗░███████║██║░░██║╚█████╗░░░░██║░░░  ╚█████╗░██║░░╚═╝███████║██╔██╗██║
-    ██║░░╚██╗██╔══██║██║░░██║░╚═══██╗░░░██║░░░  ░╚═══██╗██║░░██╗██╔══██║██║╚████║
-    ╚██████╔╝██║░░██║╚█████╔╝██████╔╝░░░██║░░░  ██████╔╝╚█████╔╝██║░░██║██║░╚███║
-    ░╚═════╝░╚═╝░░╚═╝░╚════╝░╚═════╝░░░░╚═╝░░░  ╚═════╝░░╚════╝░╚═╝░░╚═╝╚═╝░░╚══╝
-    
+    Advanced Port Scanner and Security Analyzer
     Coded By GhosT LulzSec
     Telegram : @WW6WW6WW6
     GitHub: https://github.com/69d9
     All rights reserved.
-
-            o  o   o  o
-         |\/ \^/ \/|  
-         |,-------.|  
-       ,-.(|)   (|),-. 
-       \_*._ ' '_.* _/  
-        /-.--' .-`\  
-   ,--./    `---'    \,--. 
-   \   |(  )     (  )|   /  
-hjw \  |         |  /  
-`97  \ | /|\     /|\ | /  
-     /  \-._     _,-/  \  
-    //| \  `---'  // |\\  
-   /,-.,-.\       /,-.,-.\  
-  o   o   o      o   o    o  
+{Fore.CYAN}
+    ╔══════════════════════════════════════════════════════════════════════════╗
+    ║  [*] Features:                                                           ║
+    ║      - Advanced Port Analysis         - Service Detection               ║
+    ║      - Security Vulnerability Checks  - Firewall Detection             ║
+    ║      - DNS Enumeration               - SSL/TLS Analysis               ║
+    ║      - Real-time Banner Grabbing     - Custom Protocol Analysis      ║
+    ╚══════════════════════════════════════════════════════════════════════════╝
 """
         
         self.target = None
@@ -72,23 +65,243 @@ hjw \  |         |  /
         self.dns_records = {}
         self.ssl_info = None
         self.firewall_status = None
+        self.service_versions = {}
         
-        # Extended port list with service categories
+        # Extended port categories with descriptions
         self.port_categories = {
-            'Web Services': [80, 443, 8080, 8443, 8000, 8888],
-            'Database': [3306, 5432, 27017, 1433, 1521, 6379],
-            'Remote Access': [22, 23, 3389, 5900],
-            'File Transfer': [21, 69, 115, 139, 445],
-            'Mail': [25, 110, 143, 465, 587, 993, 995],
-            'DNS': [53, 853],
-            'Monitoring': [161, 162, 199, 1098, 1099],
-            'VoIP': [5060, 5061],
-            'Gaming': [27015, 27016, 28015],
-            'IoT': [1883, 8883, 5683]
+            'Critical Services': {
+                'ports': [21, 22, 23, 25, 53, 80, 443, 3389],
+                'description': 'Essential services that require immediate attention'
+            },
+            'Web Applications': {
+                'ports': [80, 443, 8080, 8443, 4443, 8000, 8888, 9000, 9090],
+                'description': 'Web servers and applications'
+            },
+            'Databases': {
+                'ports': [1433, 1521, 3306, 5432, 6379, 27017, 27018, 27019],
+                'description': 'Database management systems'
+            },
+            'Remote Management': {
+                'ports': [22, 23, 3389, 5900, 5901, 5902, 5903],
+                'description': 'Remote access and management services'
+            },
+            'File Sharing': {
+                'ports': [137, 138, 139, 445, 2049],
+                'description': 'File sharing and network storage'
+            },
+            'Email Services': {
+                'ports': [25, 110, 143, 465, 587, 993, 995],
+                'description': 'Email and messaging protocols'
+            },
+            'Security Services': {
+                'ports': [161, 162, 389, 636, 1645, 1812],
+                'description': 'Security and authentication services'
+            },
+            'Monitoring': {
+                'ports': [161, 162, 199, 1098, 1099, 4949],
+                'description': 'System and network monitoring'
+            },
+            'Development': {
+                'ports': [8080, 9000, 9001, 9002, 3000, 4200, 5000],
+                'description': 'Development and debugging services'
+            },
+            'IoT & Industrial': {
+                'ports': [1883, 8883, 5683, 5684, 502, 44818],
+                'description': 'IoT devices and industrial protocols'
+            }
         }
 
-    def print_banner(self):
-        print(self.banner)
+        # Service fingerprints for better identification
+        self.service_fingerprints = {
+            'http': [b'HTTP/', b'Server:', b'nginx', b'apache', b'IIS'],
+            'ssh': [b'SSH-2.0', b'SSH-1.99', b'SSH-1.5'],
+            'ftp': [b'220', b'FTP', b'FileZilla'],
+            'smtp': [b'220', b'SMTP', b'Postfix', b'Exchange'],
+            'mysql': [b'MySQL', b'MariaDB'],
+            'rdp': [b'RDP', b'RDPClient'],
+            'telnet': [b'Telnet']
+        }
+
+    async def advanced_service_detection(self, port, banner):
+        """Enhanced service and version detection."""
+        service_info = {'service': 'unknown', 'version': 'unknown', 'product': 'unknown'}
+        
+        if not banner:
+            return service_info
+
+        # Custom protocol analysis
+        for service, signatures in self.service_fingerprints.items():
+            for sig in signatures:
+                if sig.lower() in banner.lower().encode():
+                    service_info['service'] = service
+                    
+                    # Extract version information
+                    version_patterns = [
+                        rb'(?i)version[ :]*([\d.]+)',
+                        rb'(?i)([\d.]+)[-_]release',
+                        rb'(?i)/([\d.]+)'
+                    ]
+                    
+                    for pattern in version_patterns:
+                        match = re.search(pattern, banner.encode())
+                        if match:
+                            service_info['version'] = match.group(1).decode()
+                            break
+                    
+                    # Extract product information
+                    product_patterns = [
+                        rb'(?i)server: ([^\r\n]+)',
+                        rb'(?i)product: ([^\r\n]+)'
+                    ]
+                    
+                    for pattern in product_patterns:
+                        match = re.search(pattern, banner.encode())
+                        if match:
+                            service_info['product'] = match.group(1).decode()
+                            break
+                    
+                    return service_info
+        
+        return service_info
+
+    def format_service_info(self, port, service_info):
+        """Format service information for display."""
+        service = service_info['service']
+        version = service_info['version']
+        product = service_info['product']
+        
+        if service != 'unknown':
+            result = f"{port}/tcp {service}"
+            if version != 'unknown':
+                result += f" {version}"
+            if product != 'unknown':
+                result += f" ({product})"
+            return result
+        return f"{port}/tcp"
+
+    async def analyze_response_time(self, port):
+        """Analyze port response time and behavior."""
+        try:
+            start_time = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            
+            if sock.connect_ex((self.target, port)) == 0:
+                response_time = time.time() - start_time
+                
+                # Test multiple connections
+                connection_times = []
+                for _ in range(3):
+                    start = time.time()
+                    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    test_sock.settimeout(2)
+                    if test_sock.connect_ex((self.target, port)) == 0:
+                        connection_times.append(time.time() - start)
+                    test_sock.close()
+                
+                return {
+                    'response_time': response_time,
+                    'avg_response': sum(connection_times) / len(connection_times) if connection_times else None,
+                    'stability': self.calculate_stability(connection_times)
+                }
+            return None
+        except:
+            return None
+
+    def calculate_stability(self, times):
+        """Calculate connection stability score."""
+        if not times or len(times) < 2:
+            return "Unknown"
+        
+        variance = sum((x - sum(times)/len(times)) ** 2 for x in times) / len(times)
+        if variance < 0.1:
+            return "Stable"
+        elif variance < 0.3:
+            return "Moderate"
+        else:
+            return "Unstable"
+
+    async def check_security_headers(self, port):
+        """Check for security headers on web services."""
+        security_headers = {
+            'Strict-Transport-Security': 'Missing HSTS',
+            'X-Frame-Options': 'Missing clickjacking protection',
+            'X-Content-Type-Options': 'Missing MIME-type protection',
+            'Content-Security-Policy': 'Missing CSP',
+            'X-XSS-Protection': 'Missing XSS protection',
+            'Referrer-Policy': 'Missing referrer policy'
+        }
+
+        try:
+            protocol = 'https' if port == 443 else 'http'
+            response = requests.get(
+                f"{protocol}://{self.target}:{port}",
+                verify=False,
+                timeout=5,
+                headers={'User-Agent': 'GhostScan Security Analyzer'}
+            )
+            
+            missing_headers = []
+            for header, message in security_headers.items():
+                if header not in response.headers:
+                    missing_headers.append(message)
+            
+            return missing_headers
+        except:
+            return []
+
+    def print_results(self, elapsed_time):
+        """Enhanced results presentation."""
+        print(f"\n{self.A}{'='*80}{self.r}")
+        print(f"{self.F}[+] Scan Results for {self.target} ({self.ip_address}){self.r}")
+        print(f"{self.A}{'='*80}{self.r}")
+
+        # Print scan statistics
+        print(f"\n{self.Y}[*] Scan Statistics:{self.r}")
+        print(f"  - Scan Duration: {elapsed_time:.2f} seconds")
+        print(f"  - Total Ports Scanned: {len(self.open_ports) + len(self.closed_ports)}")
+        print(f"  - Open Ports: {len(self.open_ports)}")
+        
+        # Print results by category
+        for category, info in self.port_categories.items():
+            category_ports = [(p, s, b) for p, s, b in self.open_ports if p in info['ports']]
+            if category_ports:
+                print(f"\n{self.F}[+] {category}: {info['description']}{self.r}")
+                for port, service, banner in sorted(category_ports):
+                    service_info = self.advanced_service_detection(port, banner)
+                    formatted_service = self.format_service_info(port, service_info)
+                    print(f"  {self.Y}{formatted_service}{self.r}")
+                    
+                    # Print additional security information for web services
+                    if port in [80, 443, 8080, 8443]:
+                        missing_headers = self.check_security_headers(port)
+                        if missing_headers:
+                            print(f"    {self.Z}Security Issues:{self.r}")
+                            for header in missing_headers:
+                                print(f"    - {header}")
+
+        # Print DNS information if available
+        if self.dns_records:
+            print(f"\n{self.F}[+] DNS Information:{self.r}")
+            for record_type, records in self.dns_records.items():
+                print(f"  {self.Y}{record_type} Records:{self.r}")
+                for record in records:
+                    print(f"    - {record}")
+
+        # Print security analysis
+        if self.vulnerabilities:
+            print(f"\n{self.Z}[!] Security Concerns:{self.r}")
+            for vuln in self.vulnerabilities:
+                print(f"  - {vuln}")
+
+        # Print recommendations
+        print(f"\n{self.F}[+] Security Recommendations:{self.r}")
+        if len(self.open_ports) > 0:
+            print("  - Review and close unnecessary open ports")
+            print("  - Implement proper access controls for critical services")
+            print("  - Regular security audits recommended")
+            
+        print(f"\n{self.A}{'='*80}{self.r}")
 
     async def resolve_target(self, target):
         """Resolve target hostname to IP and gather basic information."""
@@ -251,56 +464,13 @@ hjw \  |         |  /
         """Scan ports asynchronously."""
         all_ports = []
         for category_ports in self.port_categories.values():
-            all_ports.extend(category_ports)
+            all_ports.extend(category_ports['ports'])
         all_ports = list(set(all_ports))  # Remove duplicates
         
         tasks = []
         for port in all_ports:
             tasks.append(asyncio.create_task(self.check_port(port)))
         await asyncio.gather(*tasks)
-
-    def print_results(self, elapsed_time):
-        """Print scan results in a formatted way."""
-        print(f"\n{self.A}═══════════════════════════════════════════════════════════════{self.r}")
-        print(f"{self.A}Scan Results for {self.target} ({self.ip_address}){self.r}")
-        print(f"{self.A}═══════════════════════════════════════════════════════════════{self.r}")
-        
-        # Print open ports by category
-        print(f"\n{self.F}Open Ports by Category:{self.r}")
-        for category, ports in self.port_categories.items():
-            category_ports = [(p, s, b) for p, s, b in self.open_ports if p in ports]
-            if category_ports:
-                print(f"\n{self.Y}{category}:{self.r}")
-                for port, service, banner in category_ports:
-                    print(f"{self.F}{port}/tcp\t{service}\t{banner[:50] if banner else ''}{self.r}")
-
-        # Print DNS information
-        if self.dns_records:
-            print(f"\n{self.F}DNS Records:{self.r}")
-            for record_type, records in self.dns_records.items():
-                print(f"{self.Y}{record_type} Records:{self.r}")
-                for record in records:
-                    print(f"  {record}")
-
-        # Print SSL information
-        if self.ssl_info:
-            print(f"\n{self.F}SSL/TLS Information:{self.r}")
-            print(f"Version: {self.ssl_info['version']}")
-            print(f"Cipher: {self.ssl_info['cipher']}")
-
-        # Print firewall status
-        if self.firewall_status:
-            print(f"\n{self.F}Firewall Detection:{self.r}")
-            print(f"{self.firewall_status}")
-
-        # Print vulnerabilities
-        if self.vulnerabilities:
-            print(f"\n{self.Z}Potential Vulnerabilities:{self.r}")
-            for vuln in self.vulnerabilities:
-                print(f"- {vuln}")
-
-        print(f"\n{self.F}Scan completed in {elapsed_time:.2f} seconds.{self.r}")
-        print(f"{self.A}═══════════════════════════════════════════════════════════════{self.r}")
 
     async def run(self):
         """Main execution method."""
@@ -335,6 +505,9 @@ hjw \  |         |  /
         except Exception as e:
             print(f"\n{self.Z}An error occurred: {str(e)}{self.r}")
             sys.exit(1)
+
+    def print_banner(self):
+        print(self.banner)
 
 if __name__ == "__main__":
     scanner = ScanMap()
